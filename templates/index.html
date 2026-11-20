@@ -20,6 +20,14 @@
   .msg.ok { background: #e3f2e9; border: 1px solid #7bc796; }
   .msg.error, .hall { background: #fdecea; border: 1px solid #f0a9a0; }
   .hall { border-radius: 8px; padding: 14px 18px; margin: 16px 0; }
+  .recap-pass { background: #e3f2e9; border: 1px solid #7bc796; border-radius: 8px;
+                padding: 14px 18px; margin: 16px 0; }
+  .recap-fail { background: #fdecea; border: 1px solid #f0a9a0; border-radius: 8px;
+                padding: 14px 18px; margin: 16px 0; }
+  .recap-pass h2, .recap-fail h2 { margin-top: 0; }
+  .recap-pass ul, .recap-fail ul { margin: 6px 0; }
+  code.pkg { font-size: .95rem; background: #f0f4f8; padding: 1px 6px;
+             border-radius: 4px; }
   .est-num { font-size: 1.2rem; font-weight: 700; }
   .na { color: #b3261e; font-weight: 700; }
   form.inline { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
@@ -63,6 +71,47 @@
   </table>
   <p>候选号并集（共 {{ hall.union_count }} 个）：
      {{ hall.union | join('、') if hall.union else '（空）' }}</p>
+</div>
+{% endif %}
+
+{% if recap_result %}
+<div class="{{ 'recap-pass' if recap_result.passed else 'recap-fail' }}">
+  <h2>复算核验结论 · 包号 <code class="pkg">{{ package_no }}</code></h2>
+  {% if recap_result.passed %}
+  <p><b>核验通过。</b>交回配对 {{ recap_result.recap_count }} 对，与发包时记录的最大重捕数
+     {{ recap_result.max_recap }} 一致；任一合法的最大配对均予通过。</p>
+  {% elif recap_result.legal and recap_result.augment %}
+    <p><b>配对本身合法，但还能多配。</b>当前 {{ recap_result.recap_count }} 对，
+       发包时记录的最大重捕数为 {{ recap_result.max_recap }}。
+       按下列步骤换配即可增配一对（编号均为本站原号）：</p>
+    <ul>
+      {% for s, t in recap_result.augment.remove %}
+      <li>撤掉配对：样本 {{ s }} — 标记 {{ t }}</li>
+      {% endfor %}
+      {% for s, t in recap_result.augment.add %}
+      <li>补上配对：样本 {{ s }} — 标记 {{ t }}</li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p><b>核验不通过。</b>当前形成 {{ recap_result.recap_count }} 个合法配对，
+       发包时记录的最大重捕数为 {{ recap_result.max_recap }}。原因如下
+       （可定位的记录均用本站原号显示）：</p>
+    <ul>
+      {% for reason in recap_result.reasons %}<li>{{ reason }}</li>{% endfor %}
+    </ul>
+  {% endif %}
+  <details>
+    <summary>本次认可的合法配对（原号，共 {{ recap_result.pairs | length }} 对）</summary>
+    {% if recap_result.pairs %}
+    <table>
+      <tr><th>次轮样本号</th><th>首轮标记号</th></tr>
+      {% for s, t in recap_result.pairs %}
+      <tr><td>{{ s }}</td><td>{{ t }}</td></tr>
+      {% endfor %}
+    </table>
+    {% else %}<p>（无）</p>{% endif %}
+  </details>
+  <p class="hint">核验只读取发包时留存的对应表与记录，不改动当前调查记录与估算。</p>
 </div>
 {% endif %}
 
@@ -174,6 +223,47 @@
   <p>{{ tags | join('、') }}</p>
 </details>
 {% endif %}
+
+<section>
+  <h2>4. 外部复算：发包与核验</h2>
+  <p class="hint">现场标记号与样本号留在本站。下载的复算包只含<b>包号</b>和换过代号的两轮记录
+     （次轮状态与候选关系照录）；每次发包使用全新代号，代号对应表与核验依据随包留存，
+     留存失败不给下载。重新导入调查或重启后，旧包仍可核验，核验不改调查记录和估算。</p>
+
+  <form method="post" action="{{ url_for('recap_create_package') }}">
+    <button type="submit" {% if not est %}disabled{% endif %}>
+      下载当前调查的 JSON 复算包
+    </button>
+    {% if not est %}<span class="hint">需先上传两轮 CSV 并生成估算。</span>{% endif %}
+  </form>
+
+  {% if packages %}
+  <h3>已留存复算包（共 {{ packages | length }} 个）</h3>
+  <table>
+    <tr><th>包号（代号）</th><th>留存时间</th><th>首轮/次轮条数</th>
+        <th>发包时最大重捕数</th><th>操作</th></tr>
+    {% for p in packages %}
+    <tr>
+      <td><code class="pkg">{{ p.package_no }}</code></td>
+      <td>{{ p.created_at }}</td>
+      <td>{{ p.n1 }} / {{ p.n2 }}</td>
+      <td>{{ p.max_recap }}</td>
+      <td><a href="{{ url_for('recap_download_package', package_no=p.package_no) }}">重新下载该包</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  <h3>上传复算方交回的 JSON</h3>
+  <p class="hint">文件顶层含 <code>package_no</code> 与 <code>pairs</code>，
+     每个配对为 <code>{"sample_no": 包内样本代号, "tag": 包内标记代号}</code>。
+     只收本包代号；本站按发包时的记录核对有标必配、无标不配、候选关系以及样本和标记各只用一次。</p>
+  <form method="post" action="{{ url_for('recap_verify') }}" enctype="multipart/form-data">
+    <label class="file">复算结果 JSON：
+      <input type="file" name="recap_file" accept=".json,application/json" required></label>
+    <button type="submit">上传并核验</button>
+  </form>
+</section>
 
 </body>
 </html>
